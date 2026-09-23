@@ -1,0 +1,151 @@
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -4,7 +4,7 @@
+ 
+ [project]
+ name = "pdf-accessibility-helper"
+-version = "0.3.2"
++version = "0.3.3"
+ description = "Simple Windows GUI for batch PDF OCR, accessibility tagging, validation, and audit reporting."
+ readme = "README.md"
+ requires-python = ">=3.11"
+--- a/src/pdf_accessibility_helper/__init__.py
++++ b/src/pdf_accessibility_helper/__init__.py
+@@ -1 +1 @@
+-__version__ = "0.3.2"
++__version__ = "0.3.3"
+--- a/src/pdf_accessibility_helper/app.py
++++ b/src/pdf_accessibility_helper/app.py
+@@ -180,7 +180,7 @@
+     def _set_running_ui(self, running: bool) -> None:
+         self._running = running
+         self.start_button.configure(state="disabled" if running else "normal")
+-        self.stop_button.configure(state="normal" if running else "disabled")
++        self.stop_button.configure(text="STOP", state="normal" if running else "disabled")
+         if running:
+             self.activity.start(12)
+         else:
+@@ -268,7 +268,7 @@
+         # often try to move to the next page after a killed Tesseract process;
+         # without this gate they can keep spawning blank consoles for seconds.
+         set_child_launch_blocked(True)
+-        self.stop_button.configure(state="disabled")
++        self.stop_button.configure(text="STOPPING…", state="disabled")
+         self.status_var.set("Stopping safely…")
+         self.activity_var.set("Stopping current OCR/tagging process…")
+         self._log("Stop requested. Cancelling the current operation and preserving completed outputs.")
+--- a/src/pdf_accessibility_helper/runtime.py
++++ b/src/pdf_accessibility_helper/runtime.py
+@@ -215,50 +215,66 @@
+             _ATEXIT_REGISTERED = True
+ 
+ 
+-def _taskkill_tree(pid: int) -> None:
+-    if not sys.platform.startswith("win"):
+-        return
++def _start_taskkill_tree(pid: int) -> subprocess.Popen | None:
++    """Start one hidden taskkill process without waiting for it serially."""
++    if not sys.platform.startswith("win"):
++        return None
+     kwargs = windows_hidden_subprocess_kwargs()
+     try:
+-        _ORIGINAL_POPEN(
++        return _ORIGINAL_POPEN(
+             ["taskkill", "/PID", str(pid), "/T", "/F"],
+             stdout=subprocess.DEVNULL,
+             stderr=subprocess.DEVNULL,
+             stdin=subprocess.DEVNULL,
+             **kwargs,
+-        ).wait(timeout=8)
++        )
+     except Exception:
+-        pass
++        return None
+ 
+ 
+ def terminate_tracked_processes() -> None:
+     """Best-effort hard stop of OCR/tagging/validation process trees.
+ 
+-    This function intentionally bypasses the patched Popen when invoking
+-    taskkill, so it still works after the launch gate is closed.
++    Windows helpers are killed in parallel instead of waiting as much as eight
++    seconds per PID. This matters for OCR because Tesseract may have several
++    short-lived page workers registered at once; serial taskkill calls made the
++    old build appear to keep working for tens of seconds after Stop/Exit.
+     """
+     _prune_children()
+     with _ACTIVE_LOCK:
+         active = [proc for proc in _ACTIVE_CHILDREN.values() if proc.poll() is None]
+ 
+     if sys.platform.startswith("win"):
+-        # Killing the newest descendants first shortens teardown when several
+-        # per-page OCR helpers are alive at once. taskkill /T also catches
+-        # grandchildren such as cmd.exe -> java.exe.
+-        for proc in reversed(active):
+-            _taskkill_tree(proc.pid)
+-        # Give roots a very short chance to observe their dead children, then
+-        # force-kill anything still alive without waiting many seconds per PID.
+-        deadline = time.monotonic() + 2.0
+-        for proc in active:
++        killers = [k for proc in reversed(active) if (k := _start_taskkill_tree(proc.pid)) is not None]
++
++        # All taskkill processes run concurrently. Give the whole cancellation
++        # operation a small shared deadline, not a timeout multiplied by PIDs.
++        deadline = time.monotonic() + 2.5
++        for killer in killers:
+             remaining = max(0.0, deadline - time.monotonic())
+             if remaining <= 0:
+                 break
+             try:
+-                proc.wait(timeout=remaining)
++                killer.wait(timeout=remaining)
+             except Exception:
+                 try:
++                    killer.kill()
++                except Exception:
++                    pass
++
++        # A root can outlive taskkill if it raced to exit/restart. Kill any
++        # tracked survivors directly. No long per-process waits here.
++        for proc in active:
++            if proc.poll() is None:
++                try:
+                     proc.kill()
++                except Exception:
++                    pass
++        final_deadline = time.monotonic() + 0.75
++        for proc in active:
++            if proc.poll() is None:
++                try:
++                    proc.wait(timeout=max(0.0, final_deadline - time.monotonic()))
+                 except Exception:
+                     pass
+     else:
+@@ -267,9 +283,12 @@
+                 proc.terminate()
+             except Exception:
+                 pass
++        deadline = time.monotonic() + 2.0
+         for proc in active:
++            if proc.poll() is not None:
++                continue
+             try:
+-                proc.wait(timeout=2)
++                proc.wait(timeout=max(0.0, deadline - time.monotonic()))
+             except Exception:
+                 try:
+                     proc.kill()
+--- a/tests/test_runtime.py
++++ b/tests/test_runtime.py
+@@ -37,3 +37,11 @@
+     assert runtime.child_launch_blocked() is True
+     runtime.set_child_launch_blocked(False)
+     assert runtime.child_launch_blocked() is False
++
++
++def test_child_launch_blocked_error_type():
++    assert issubclass(runtime.ChildLaunchBlocked, RuntimeError)
++
++
++def test_terminate_with_no_children_is_safe():
++    runtime.terminate_tracked_processes()
