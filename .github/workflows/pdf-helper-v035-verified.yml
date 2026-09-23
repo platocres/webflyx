@@ -1,0 +1,93 @@
+name: PDF Helper v0.3.5 Verified Windows Build
+
+on:
+  push:
+    branches:
+      - build/pdf-accessibility-helper-v0.3.5
+
+jobs:
+  windows-portable:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Reconstruct exact v0.3.5 source
+        shell: pwsh
+        run: |
+          $ordered = @(
+            "pah-src\v035_00.b64",
+            "pah-src\v035_01.b64",
+            "pah-src\v035_02.b64",
+            "pah-src\v035_03.b64",
+            "pah-src\v035_04.b64",
+            "pah-src\v035_05.b64",
+            "pah-src\v035_06a.b64",
+            "pah-src\v035_06b.b64",
+            "pah-src\v035_07.b64"
+          )
+          foreach ($part in $ordered) {
+            if (-not (Test-Path $part)) { throw "Missing source chunk: $part" }
+          }
+          $b64 = ($ordered | ForEach-Object { (Get-Content $_ -Raw).Trim() }) -join ""
+          if ($b64.Length -ne 53668) { throw "Unexpected source base64 length: $($b64.Length)" }
+          $bytes = [Convert]::FromBase64String($b64)
+          if ($bytes.Length -ne 40249) { throw "Unexpected source ZIP length: $($bytes.Length)" }
+          [IO.File]::WriteAllBytes("$PWD\pdf-helper-source.zip", $bytes)
+          $hash = (Get-FileHash "$PWD\pdf-helper-source.zip" -Algorithm SHA256).Hash.ToLower()
+          if ($hash -ne "edec12ac7c9c0e74c23b6af8e98932da4e5e8a8a10767075125303b39d44ceda") {
+            throw "Source archive hash mismatch: $hash"
+          }
+          Expand-Archive "$PWD\pdf-helper-source.zip" -DestinationPath "$PWD\source" -Force
+          if (-not (Test-Path "$PWD\source\pdf-accessibility-helper\pyproject.toml")) {
+            throw "Source archive did not reconstruct correctly."
+          }
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Install Tesseract
+        shell: pwsh
+        run: |
+          choco install tesseract --yes --no-progress
+          if (Test-Path "C:\Program Files\Tesseract-OCR") {
+            "C:\Program Files\Tesseract-OCR" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          }
+
+      - name: Unit tests
+        shell: pwsh
+        working-directory: source/pdf-accessibility-helper
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+          python -m compileall -q src launcher.py
+          python -m pytest -q
+
+      - name: Build and Windows runtime verification
+        shell: pwsh
+        working-directory: source/pdf-accessibility-helper
+        run: |
+          .\scripts\build_windows.ps1 -OutputRoot dist
+          $exe = ".\dist\PDFAccessibilityHelper\PDFAccessibilityHelper.exe"
+          if (-not (Test-Path $exe)) { throw "Portable executable was not produced." }
+
+      - name: Package portable ZIP
+        shell: pwsh
+        working-directory: source/pdf-accessibility-helper
+        run: |
+          $zip = ".\PDF-Accessibility-Helper-v0.3.5-Windows-Portable.zip"
+          Compress-Archive -Path ".\dist\PDFAccessibilityHelper\*" -DestinationPath $zip -Force
+          Get-FileHash $zip -Algorithm SHA256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PDF-Accessibility-Helper-v0.3.5-Windows-Portable
+          path: source/pdf-accessibility-helper/PDF-Accessibility-Helper-v0.3.5-Windows-Portable.zip
+          if-no-files-found: error
+          retention-days: 7
