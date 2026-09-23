@@ -20,7 +20,7 @@ jobs:
       - name: Reconstruct source archive
         shell: powershell
         run: |
-          $parts = 0..4 | ForEach-Object { "pah-build2/src_{0:D2}.b64" -f $_ }
+          $parts = @("pah-build2/src_00.b64","pah-build2/src_01.b64","pah-build2/src_02a.b64","pah-build2/src_02b.b64","pah-build2/src_03.b64","pah-build2/src_04.b64")
           foreach ($part in $parts) {
             if (-not (Test-Path $part)) { throw "Missing source chunk: $part" }
           }
