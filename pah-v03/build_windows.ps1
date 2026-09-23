@@ -95,7 +95,7 @@ if (-not $SkipCorpus) {
     if ($batchProc.ExitCode -ne 0) { throw "Corpus run aborted with exit code $($batchProc.ExitCode)" }
     $summary = Get-Content (Join-Path $corpusOutput "batch-result.json") -Raw | ConvertFrom-Json
     if ($summary.processed -ne 11) { throw "Corpus run processed $($summary.processed) files instead of 11." }
-    if ($summary.failed -lt 2) { throw "Corpus expected at least the malformed and encrypted fixtures to fail cleanly." }
+    if ($summary.failed -ne 2) { throw "Corpus expected exactly the malformed and encrypted fixtures to fail; got $($summary.failed) failures." }\n    if (($summary.ready + $summary.review) -ne 9) { throw "Corpus expected all 9 valid PDFs to complete as ready/review." }
 
     Copy-Item (Join-Path $root "test-corpus") (Join-Path $app "test-corpus") -Recurse -Force
 }
