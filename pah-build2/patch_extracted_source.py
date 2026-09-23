@@ -2,12 +2,12 @@ from pathlib import Path
 
 root = Path("pdf-accessibility-helper")
 
-# Release version for the Windows portability/validation milestone.
+# Release version for the portable Windows milestone.
 for rel in ("pyproject.toml", "src/pdf_accessibility_helper/__init__.py"):
     p = root / rel
     text = p.read_text(encoding="utf-8")
-    text = text.replace('version = "0.2.0"', 'version = "0.2.2"')
-    text = text.replace('__version__ = "0.2.0"', '__version__ = "0.2.2"')
+    text = text.replace('version = "0.2.0"', 'version = "0.2.3"')
+    text = text.replace('__version__ = "0.2.0"', '__version__ = "0.2.3"')
     p.write_text(text, encoding="utf-8")
 
 # pdf-a11y falls back from OpenDataLoader to its built-in heuristic tagger
@@ -31,12 +31,19 @@ if '"heuristic": {' not in text:
     if needle not in text:
         raise SystemExit("Could not locate opendataloader config block")
     text = text.replace(needle, replacement, 1)
+
+# Be conservative about declaring images decorative. A low-entropy chart or
+# simple diagram can still convey course content, so route all but true 1x1
+# artifacts to the human-review workflow instead of guessing.
+text = text.replace(
+    '"max_decorative_width": 32,\n                "max_decorative_height": 32,\n                "entropy_threshold": 1.5,',
+    '"max_decorative_width": 1,\n                "max_decorative_height": 1,\n                # Prefer human review over falsely discarding a simple diagram.\n                "entropy_threshold": 0.0,',
+)
 config_path.write_text(text, encoding="utf-8")
 
 # PyInstaller --windowed starts with sys.stdout/sys.stderr == None on Windows.
-# OpenDataLoader's Python runner relays Java output to sys.stdout and otherwise
-# crashes with "'NoneType' object has no attribute 'write'", forcing pdf-a11y
-# onto its weaker fallback tagger. Give libraries a writable null stream.
+# OpenDataLoader relays Java output to sys.stdout; without this shim it crashes
+# and pdf-a11y silently falls back to the less-capable heuristic tagger.
 launcher = root / "launcher.py"
 text = launcher.read_text(encoding="utf-8")
 if "def _ensure_standard_streams()" not in text:
@@ -62,11 +69,44 @@ def main() -> int:
     )
 launcher.write_text(text, encoding="utf-8")
 
+# pdf-a11y currently emits two "warning" findings for successful no-op scans.
+# They do not require human action and should not turn every otherwise-valid
+# document into a yellow "Needs review" result.
+pipeline_path = root / "src" / "pdf_accessibility_helper" / "pipeline.py"
+text = pipeline_path.read_text(encoding="utf-8")
+old = '''            if severity in {"manual_required", "warning", "warn", "review", "error"}:
+                if message:
+                    warnings.append(message)
+'''
+new = '''            benign_noop = (
+                message_lower.startswith("table detection scan complete: 0 table")
+                or message_lower.startswith("wtpdf 8.8-1: converted 0 destination")
+            )
+            if severity in {"manual_required", "warning", "warn", "review", "error"}:
+                if message and not benign_noop:
+                    warnings.append(message)
+'''
+if "benign_noop =" not in text:
+    if old not in text:
+        raise SystemExit("Could not locate warning collection block")
+    text = text.replace(old, new, 1)
+pipeline_path.write_text(text, encoding="utf-8")
+
 # Strengthen corpus acceptance. Ordinary documents must survive OCR/tagging,
 # get structure + language metadata, and must use OpenDataLoader rather than
-# silently falling back to the approximation tagger.
+# silently falling back. OCR and human-review paths are explicitly asserted.
 build_path = root / "scripts" / "build_windows.ps1"
 text = build_path.read_text(encoding="utf-8")
+
+# Preserve our own package metadata in the frozen app so audit reports carry
+# the exact helper version.
+if "--copy-metadata pdf-accessibility-helper" not in text:
+    text = text.replace(
+        '    --name "PDFAccessibilityHelper" `\n    --collect-all ocrmypdf `\n',
+        '    --name "PDFAccessibilityHelper" `\n    --copy-metadata pdf-accessibility-helper `\n    --collect-all ocrmypdf `\n',
+        1,
+    )
+
 gate = '    if ($summary.failed -lt 2) { throw "Corpus expected at least the malformed and encrypted fixtures to fail cleanly." }\n'
 stronger = gate + r'''    $detailPath = Join-Path $corpusOutput "_accessibility_reports\Accessibility_Remediation_Summary.json"
     if (-not (Test-Path $detailPath)) { throw "Corpus detail report was not generated." }
@@ -101,15 +141,25 @@ stronger = gate + r'''    $detailPath = Join-Path $corpusOutput "_accessibility_
         if ($row.pages_without_text_after -ne 0) { throw "OCR did not produce extractable text for $name." }
     }
 
+    # The scanned handout is deliberately built to be fully machine-checkable.
+    $scanned = $detail.files | Where-Object { $_.source_file -eq "02_scanned_handout.pdf" } | Select-Object -First 1
+    if (-not $scanned.validator_passed) { throw "Scanned OCR fixture did not pass veraPDF." }
+    if ($scanned.status -ne "ready") { throw "Scanned OCR fixture should be Ready, got $($scanned.status)." }
+
+    # A meaningful image must never be auto-discarded as decorative. It should
+    # produce the simple human alt-text review CSV.
+    $imageReview = Join-Path $corpusOutput "_accessibility_reports\06_meaningful_image_images_review.csv"
+    if (-not (Test-Path $imageReview)) { throw "Meaningful image fixture did not produce an alt-text review CSV." }
+
     $malformed = $detail.files | Where-Object { $_.source_file -eq "10_malformed_truncated.pdf" } | Select-Object -First 1
     $encrypted = $detail.files | Where-Object { $_.source_file -eq "11_password_protected.pdf" } | Select-Object -First 1
     if ($malformed.status -ne "failed") { throw "Malformed fixture should fail cleanly." }
     if ($encrypted.status -ne "failed") { throw "Encrypted fixture should fail cleanly." }
 '''
-if "OpenDataLoader fell back on" not in text:
+if "Meaningful image fixture did not produce" not in text:
     if gate not in text:
         raise SystemExit("Could not locate corpus gate")
     text = text.replace(gate, stronger, 1)
 build_path.write_text(text, encoding="utf-8")
 
-print("Patched v0.2.2: fallback config, windowed stdout shim, and strict corpus gates.")
+print("Patched v0.2.3: ODL windowed compatibility, conservative images, useful statuses, strict corpus gates.")
