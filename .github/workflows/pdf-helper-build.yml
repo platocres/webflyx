@@ -16,7 +16,7 @@ jobs:
       - name: Reconstruct source archive
         shell: pwsh
         run: |
-          $parts = Get-ChildItem pah-src\src_*.b64 | Sort-Object Name
+          $parts = Get-ChildItem pah-src\v034_*.b64 | Sort-Object Name
           if (-not $parts) { throw "No source chunks found" }
           $b64 = ($parts | ForEach-Object { Get-Content $_.FullName -Raw }) -join ""
           [IO.File]::WriteAllBytes("pdf-helper-source.zip", [Convert]::FromBase64String($b64))
