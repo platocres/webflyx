@@ -46,10 +46,9 @@ jobs:
 
       - name: Apply v0.3.3 stop-teardown fixes
         shell: powershell
-        working-directory: buildsrc/pdf-accessibility-helper
         run: |
-          git apply "$env:GITHUB_WORKSPACE\pah-v032\v033.patch"
-          if ((Get-Content ".\src\pdf_accessibility_helper\__init__.py" -Raw) -notmatch '0\.3\.3') {
+          git apply --directory=buildsrc/pdf-accessibility-helper ".\\pah-v032\\v033.patch"
+          if ((Get-Content ".\\buildsrc\\pdf-accessibility-helper\\src\\pdf_accessibility_helper\\__init__.py" -Raw) -notmatch '0\\.3\\.3') {
             throw "v0.3.3 patch did not apply"
           }
 
