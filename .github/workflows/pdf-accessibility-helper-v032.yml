@@ -57,7 +57,7 @@ jobs:
           }
 
           '@
-          $text = $helper + $text
+          $text = $text.Replace('$ErrorActionPreference = "Stop"', '$ErrorActionPreference = "Stop"' + [Environment]::NewLine + [Environment]::NewLine + $helper)
           $text = $text.Replace('& (Join-Path $app "PDFAccessibilityHelper.exe") --diagnostics $diag', 'Invoke-FrozenGui (Join-Path $app "PDFAccessibilityHelper.exe") @("--diagnostics", $diag)')
           $text = $text.Replace('& (Join-Path $app "PDFAccessibilityHelper.exe") --runtime-self-test $runtimeSelfTest', 'Invoke-FrozenGui (Join-Path $app "PDFAccessibilityHelper.exe") @("--runtime-self-test", $runtimeSelfTest)')
           $text = $text.Replace('& (Join-Path $app "PDFAccessibilityHelper.exe") --batch (Join-Path $root "test-corpus\\input") $corpusOutput', 'Invoke-FrozenGui (Join-Path $app "PDFAccessibilityHelper.exe") @("--batch", (Join-Path $root "test-corpus\\input"), $corpusOutput)')
