@@ -20,9 +20,20 @@ jobs:
       - name: Reconstruct exact source archive
         shell: powershell
         run: |
-          $chunks = Get-ChildItem .\pah-build2\src_*.b64 | Sort-Object Name
-          if ($chunks.Count -ne 5) { throw "Expected 5 source chunks, found $($chunks.Count)." }
-          $b64 = ($chunks | ForEach-Object { Get-Content $_.FullName -Raw }) -join ""
+          $names = @(
+            ".\pah-build2\src_00.b64",
+            ".\pah-build2\src_01.b64",
+            ".\pah-build2\src_020.b64",
+            ".\pah-build2\src_021.b64",
+            ".\pah-build2\src_022.b64",
+            ".\pah-build2\src_023.b64",
+            ".\pah-build2\src_03.b64",
+            ".\pah-build2\src_04.b64"
+          )
+          foreach ($name in $names) {
+            if (-not (Test-Path $name)) { throw "Missing source chunk: $name" }
+          }
+          $b64 = ($names | ForEach-Object { Get-Content $_ -Raw }) -join ""
           [IO.File]::WriteAllBytes(".\pdf-accessibility-helper-source.zip", [Convert]::FromBase64String($b64))
           $actual = (Get-FileHash .\pdf-accessibility-helper-source.zip -Algorithm SHA256).Hash.ToLowerInvariant()
           $expected = "e53f89f52cc32a744f69770f9e99683304c8648ac2e0f2d7fd706b155f8df060"
