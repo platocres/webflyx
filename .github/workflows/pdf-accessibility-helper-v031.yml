@@ -47,6 +47,7 @@ jobs:
       - name: Apply v0.3.3 stop-teardown fixes
         shell: powershell
         run: |
+          python -c "from pathlib import Path; p=Path(r'pah-v032/v033.patch'); p.write_bytes(p.read_bytes().replace(b'\\r\\n', b'\\n'))"
           git apply --directory=buildsrc/pdf-accessibility-helper ".\\pah-v032\\v033.patch"
           if ((Get-Content ".\\buildsrc\\pdf-accessibility-helper\\src\\pdf_accessibility_helper\\__init__.py" -Raw) -notmatch '0\\.3\\.3') {
             throw "v0.3.3 patch did not apply"
