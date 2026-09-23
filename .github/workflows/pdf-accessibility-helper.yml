@@ -21,30 +21,28 @@ jobs:
         shell: powershell
         run: |
           $names = @(
-            ".\pah-build2\src_00.b64",
-            ".\pah-build2\src_01.b64",
-            ".\pah-build2\src_0200.b64",
-            ".\pah-build2\src_0201.b64",
-            ".\pah-build2\src_0202.b64",
-            ".\pah-build2\src_02030.b64",
-            ".\pah-build2\src_02031.b64",
-            ".\pah-build2\src_02032.b64",
-            ".\pah-build2\src_02033.b64",
-            ".\pah-build2\src_021.b64",
-            ".\pah-build2\src_022.b64",
-            ".\pah-build2\src_023.b64",
-            ".\pah-build2\src_03.b64",
-            ".\pah-build2\src_04.b64"
+            ".\\pah-build2\\src_00.b64",
+            ".\\pah-build2\\src_01.b64",
+            ".\\pah-build2\\src_0200.b64",
+            ".\\pah-build2\\src_0201.b64",
+            ".\\pah-build2\\src_0202.b64",
+            ".\\pah-build2\\src_02030.b64",
+            ".\\pah-build2\\src_02031.b64",
+            ".\\pah-build2\\src_02032.b64",
+            ".\\pah-build2\\src_02033.b64",
+            ".\\pah-build2\\src_021.b64",
+            ".\\pah-build2\\src_022.b64",
+            ".\\pah-build2\\src_023.b64",
+            ".\\pah-build2\\src_03.b64",
+            ".\\pah-build2\\src_04.b64"
           )
-          foreach ($name in $names) {
-            if (-not (Test-Path $name)) { throw "Missing source chunk: $name" }
-          }
+          foreach ($name in $names) { if (-not (Test-Path $name)) { throw "Missing source chunk: $name" } }
           $b64 = ($names | ForEach-Object { Get-Content $_ -Raw }) -join ""
-          [IO.File]::WriteAllBytes(".\pdf-accessibility-helper-source.zip", [Convert]::FromBase64String($b64))
-          $actual = (Get-FileHash .\pdf-accessibility-helper-source.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          [IO.File]::WriteAllBytes(".\\pdf-accessibility-helper-source.zip", [Convert]::FromBase64String($b64))
+          $actual = (Get-FileHash .\\pdf-accessibility-helper-source.zip -Algorithm SHA256).Hash.ToLowerInvariant()
           $expected = "e53f89f52cc32a744f69770f9e99683304c8648ac2e0f2d7fd706b155f8df060"
           if ($actual -ne $expected) { throw "Source archive SHA256 mismatch: $actual" }
-          Expand-Archive .\pdf-accessibility-helper-source.zip -DestinationPath . -Force
+          Expand-Archive .\\pdf-accessibility-helper-source.zip -DestinationPath . -Force
 
       - uses: actions/setup-python@v6
         with:
@@ -62,46 +60,46 @@ jobs:
       - name: Make GUI smoke tests wait for completion
         shell: powershell
         run: |
-          $build = ".\pdf-accessibility-helper\scripts\build_windows.ps1"
-          $text = Get-Content $build -Raw
-
-          $oldDiag = @'
-          & (Join-Path $app "PDFAccessibilityHelper.exe") --diagnostics $diag
-          if ($LASTEXITCODE -ne 0) { throw "Frozen-app diagnostics failed with exit code $LASTEXITCODE" }
-          '@
-          $newDiag = @'
-          $frozenExe = Join-Path $app "PDFAccessibilityHelper.exe"
-          $diagProc = Start-Process -FilePath $frozenExe -ArgumentList @("--diagnostics", "`"$diag`"") -Wait -PassThru
-          if ($diagProc.ExitCode -ne 0) { throw "Frozen-app diagnostics failed with exit code $($diagProc.ExitCode)" }
-          '@
-          if (-not $text.Contains($oldDiag)) { throw "Could not locate diagnostics invocation in build script." }
-          $text = $text.Replace($oldDiag, $newDiag)
-
-          $oldBatch = @'
-              & (Join-Path $app "PDFAccessibilityHelper.exe") --batch (Join-Path $root "test-corpus\input") $corpusOutput
-              if ($LASTEXITCODE -ne 0) { throw "Corpus run aborted with exit code $LASTEXITCODE" }
-          '@
-          $newBatch = @'
-              $corpusInput = Join-Path $root "test-corpus\input"
-              $batchProc = Start-Process -FilePath $frozenExe -ArgumentList @("--batch", "`"$corpusInput`"", "`"$corpusOutput`"") -Wait -PassThru
-              if ($batchProc.ExitCode -ne 0) { throw "Corpus run aborted with exit code $($batchProc.ExitCode)" }
-          '@
-          if (-not $text.Contains($oldBatch)) { throw "Could not locate batch invocation in build script." }
-          $text = $text.Replace($oldBatch, $newBatch)
-
-          Set-Content -Path $build -Value $text -Encoding UTF8
+          $build = ".\\pdf-accessibility-helper\\scripts\\build_windows.ps1"
+          $lines = Get-Content $build
+          $out = New-Object System.Collections.Generic.List[string]
+          $diagPatched = $false
+          $batchPatched = $false
+          for ($i = 0; $i -lt $lines.Count; $i++) {
+            $trimmed = $lines[$i].Trim()
+            if ($trimmed -eq '& (Join-Path $app "PDFAccessibilityHelper.exe") --diagnostics $diag') {
+              $out.Add('$frozenExe = Join-Path $app "PDFAccessibilityHelper.exe"')
+              $out.Add('$diagProc = Start-Process -FilePath $frozenExe -ArgumentList @("--diagnostics", $diag) -Wait -PassThru')
+              $out.Add('if ($diagProc.ExitCode -ne 0) { throw "Frozen-app diagnostics failed with exit code $($diagProc.ExitCode)" }')
+              $diagPatched = $true
+              if (($i + 1) -lt $lines.Count -and $lines[$i + 1].Trim().StartsWith('if ($LASTEXITCODE -ne 0)')) { $i++ }
+              continue
+            }
+            if ($trimmed -eq '& (Join-Path $app "PDFAccessibilityHelper.exe") --batch (Join-Path $root "test-corpus\\input") $corpusOutput') {
+              $out.Add('    $corpusInput = Join-Path $root "test-corpus\\input"')
+              $out.Add('    $batchProc = Start-Process -FilePath $frozenExe -ArgumentList @("--batch", $corpusInput, $corpusOutput) -Wait -PassThru')
+              $out.Add('    if ($batchProc.ExitCode -ne 0) { throw "Corpus run aborted with exit code $($batchProc.ExitCode)" }')
+              $batchPatched = $true
+              if (($i + 1) -lt $lines.Count -and $lines[$i + 1].Trim().StartsWith('if ($LASTEXITCODE -ne 0)')) { $i++ }
+              continue
+            }
+            $out.Add($lines[$i])
+          }
+          if (-not $diagPatched) { throw "Could not locate diagnostics invocation in build script." }
+          if (-not $batchPatched) { throw "Could not locate batch invocation in build script." }
+          Set-Content -Path $build -Value $out -Encoding UTF8
 
       - name: Build portable GUI app and run adversarial corpus
         shell: powershell
         run: |
-          Set-Location .\pdf-accessibility-helper
-          .\scripts\build_windows.ps1
+          Set-Location .\\pdf-accessibility-helper
+          .\\scripts\\build_windows.ps1
 
       - name: Create portable release zip
         shell: powershell
         run: |
-          Set-Location .\pdf-accessibility-helper
-          Compress-Archive -Path .\dist\PDFAccessibilityHelper\* -DestinationPath .\dist\PDFAccessibilityHelper-Windows-x64.zip -Force
+          Set-Location .\\pdf-accessibility-helper
+          Compress-Archive -Path .\\dist\\PDFAccessibilityHelper\\* -DestinationPath .\\dist\\PDFAccessibilityHelper-Windows-x64.zip -Force
 
       - uses: actions/upload-artifact@v4
         with:
