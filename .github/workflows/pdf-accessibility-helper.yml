@@ -1,4 +1,4 @@
-name: Build PDF Accessibility Helper
+name: Build PDF Accessibility Helper portable Windows app
 
 on:
   push:
@@ -10,34 +10,47 @@ on:
   workflow_dispatch:
 
 jobs:
-  windows-portable:
+  build:
     runs-on: windows-latest
-    timeout-minutes: 90
+    timeout-minutes: 60
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Reconstruct source archive
+      - name: Reconstruct exact source archive
         shell: powershell
         run: |
-          $parts = @("pah-build2/src_00.b64","pah-build2/src_01.b64","pah-build2/src_02a.b64","pah-build2/src_02b.b64","pah-build2/src_03.b64","pah-build2/src_04.b64")
-          foreach ($part in $parts) {
-            if (-not (Test-Path $part)) { throw "Missing source chunk: $part" }
+          $names = @(
+            ".\pah-build2\src_00.b64",
+            ".\pah-build2\src_01.b64",
+            ".\pah-build2\src_0200.b64",
+            ".\pah-build2\src_0201.b64",
+            ".\pah-build2\src_0202.b64",
+            ".\pah-build2\src_02030.b64",
+            ".\pah-build2\src_02031.b64",
+            ".\pah-build2\src_02032.b64",
+            ".\pah-build2\src_02033.b64",
+            ".\pah-build2\src_021.b64",
+            ".\pah-build2\src_022.b64",
+            ".\pah-build2\src_023.b64",
+            ".\pah-build2\src_03.b64",
+            ".\pah-build2\src_04.b64"
+          )
+          foreach ($name in $names) {
+            if (-not (Test-Path $name)) { throw "Missing source chunk: $name" }
           }
-          $b64 = ($parts | ForEach-Object { Get-Content $_ -Raw }) -join ""
-          [IO.File]::WriteAllBytes("pdf-accessibility-helper-v0.2.0-source.zip", [Convert]::FromBase64String($b64))
-          $hash = (Get-FileHash "pdf-accessibility-helper-v0.2.0-source.zip" -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($hash -ne "e53f89f52cc32a744f69770f9e99683304c8648ac2e0f2d7fd706b155f8df060") {
-            throw "Source archive hash mismatch: $hash"
-          }
-          New-Item -ItemType Directory -Force -Path work | Out-Null
-          Expand-Archive "pdf-accessibility-helper-v0.2.0-source.zip" -DestinationPath work -Force
+          $b64 = ($names | ForEach-Object { Get-Content $_ -Raw }) -join ""
+          [IO.File]::WriteAllBytes(".\pdf-accessibility-helper-source.zip", [Convert]::FromBase64String($b64))
+          $actual = (Get-FileHash .\pdf-accessibility-helper-source.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          $expected = "e53f89f52cc32a744f69770f9e99683304c8648ac2e0f2d7fd706b155f8df060"
+          if ($actual -ne $expected) { throw "Source archive SHA256 mismatch: $actual" }
+          Expand-Archive .\pdf-accessibility-helper-source.zip -DestinationPath . -Force
 
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
-      - name: Install Windows runtime prerequisites
+      - name: Install external build dependencies
         shell: powershell
         run: |
           choco install tesseract -y --no-progress
@@ -46,31 +59,53 @@ jobs:
           tesseract --version
           java -version
 
-      - name: Run tests and build portable Windows app
+      - name: Make GUI smoke tests wait for completion
         shell: powershell
-        working-directory: work/pdf-accessibility-helper
         run: |
+          $build = ".\pdf-accessibility-helper\scripts\build_windows.ps1"
+          $text = Get-Content $build -Raw
+
+          $oldDiag = @'
+          & (Join-Path $app "PDFAccessibilityHelper.exe") --diagnostics $diag
+          if ($LASTEXITCODE -ne 0) { throw "Frozen-app diagnostics failed with exit code $LASTEXITCODE" }
+          '@
+          $newDiag = @'
+          $frozenExe = Join-Path $app "PDFAccessibilityHelper.exe"
+          $diagProc = Start-Process -FilePath $frozenExe -ArgumentList @("--diagnostics", "`"$diag`"") -Wait -PassThru
+          if ($diagProc.ExitCode -ne 0) { throw "Frozen-app diagnostics failed with exit code $($diagProc.ExitCode)" }
+          '@
+          if (-not $text.Contains($oldDiag)) { throw "Could not locate diagnostics invocation in build script." }
+          $text = $text.Replace($oldDiag, $newDiag)
+
+          $oldBatch = @'
+              & (Join-Path $app "PDFAccessibilityHelper.exe") --batch (Join-Path $root "test-corpus\input") $corpusOutput
+              if ($LASTEXITCODE -ne 0) { throw "Corpus run aborted with exit code $LASTEXITCODE" }
+          '@
+          $newBatch = @'
+              $corpusInput = Join-Path $root "test-corpus\input"
+              $batchProc = Start-Process -FilePath $frozenExe -ArgumentList @("--batch", "`"$corpusInput`"", "`"$corpusOutput`"") -Wait -PassThru
+              if ($batchProc.ExitCode -ne 0) { throw "Corpus run aborted with exit code $($batchProc.ExitCode)" }
+          '@
+          if (-not $text.Contains($oldBatch)) { throw "Could not locate batch invocation in build script." }
+          $text = $text.Replace($oldBatch, $newBatch)
+
+          Set-Content -Path $build -Value $text -Encoding UTF8
+
+      - name: Build portable GUI app and run adversarial corpus
+        shell: powershell
+        run: |
+          Set-Location .\pdf-accessibility-helper
           .\scripts\build_windows.ps1
 
-      - name: Package Windows portable build
+      - name: Create portable release zip
         shell: powershell
-        working-directory: work/pdf-accessibility-helper
         run: |
+          Set-Location .\pdf-accessibility-helper
           Compress-Archive -Path .\dist\PDFAccessibilityHelper\* -DestinationPath .\dist\PDFAccessibilityHelper-Windows-x64.zip -Force
 
       - uses: actions/upload-artifact@v4
         with:
           name: PDFAccessibilityHelper-Windows-x64
-          path: work/pdf-accessibility-helper/dist/PDFAccessibilityHelper-Windows-x64.zip
+          path: pdf-accessibility-helper/dist/PDFAccessibilityHelper-Windows-x64.zip
           if-no-files-found: error
-          retention-days: 30
-
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: PDFAccessibilityHelper-test-corpus-results
-          path: |
-            work/pdf-accessibility-helper/test-corpus
-            work/pdf-accessibility-helper/dist/PDFAccessibilityHelper/build-diagnostics.json
-          if-no-files-found: warn
           retention-days: 30
