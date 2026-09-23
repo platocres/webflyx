@@ -23,7 +23,8 @@ jobs:
             "pah-src\v035_04.b64",
             "pah-src\v035_05.b64",
             "pah-src\v035_06a.b64",
-            "pah-src\v035_06b.b64",
+            "pah-src\v035_06b1.b64",
+            "pah-src\v035_06b2.b64",
             "pah-src\v035_07.b64"
           )
           foreach ($part in $ordered) {
