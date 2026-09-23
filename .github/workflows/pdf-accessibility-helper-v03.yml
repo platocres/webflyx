@@ -31,6 +31,8 @@ jobs:
           $dest = Join-Path $env:RUNNER_TEMP "pah-src"
           Expand-Archive -Path $zip -DestinationPath $dest -Force
           Copy-Item ".\pah-v03\build_windows.ps1" "$dest\pdf-accessibility-helper\scripts\build_windows.ps1" -Force
+          $runtimeB64 = Get-Content ".\\pah-v03\\runtime.py.b64" -Raw
+          [IO.File]::WriteAllBytes("$dest\\pdf-accessibility-helper\\src\\pdf_accessibility_helper\\runtime.py", [Convert]::FromBase64String($runtimeB64))
           "PAH_SOURCE=$dest\pdf-accessibility-helper" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Install external build dependencies
