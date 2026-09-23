@@ -21,11 +21,9 @@ jobs:
           $b64 = ($parts | ForEach-Object { Get-Content $_.FullName -Raw }) -join ""
           [IO.File]::WriteAllBytes("pdf-helper-source.zip", [Convert]::FromBase64String($b64))
           Expand-Archive pdf-helper-source.zip -DestinationPath source -Force
+          Copy-Item pah-overrides\build_windows.ps1 source\pdf-accessibility-helper\scripts\build_windows.ps1 -Force
+          Copy-Item pah-overrides\install_verapdf.ps1 source\pdf-accessibility-helper\scripts\install_verapdf.ps1 -Force
           Get-ChildItem source\pdf-accessibility-helper
-          $veraInstaller = "source\pdf-accessibility-helper\scripts\install_verapdf.ps1"
-          $veraText = Get-Content $veraInstaller -Raw
-          $veraText = $veraText.Replace('Invoke-WebRequest -Uri "https://downloads.verapdf.org/rel/verapdf-installer.zip" -OutFile $zip', '& curl.exe -L --fail --silent --show-error -o $zip "https://software.verapdf.org/rel/verapdf-installer.zip"')
-          Set-Content -Path $veraInstaller -Value $veraText -Encoding UTF8
 
       - uses: actions/setup-python@v5
         with:
