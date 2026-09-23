@@ -44,6 +44,25 @@ jobs:
             throw "v0.3.2 patch did not apply"
           }
 
+      - name: Make frozen GUI checks wait for completion
+        shell: powershell
+        run: |
+          $path = "pdf-accessibility-helper\\scripts\\build_windows.ps1"
+          $text = Get-Content $path -Raw
+          $helper = @'
+          function Invoke-FrozenGui {
+              param([string]$Exe, [string[]]$Args)
+              $proc = Start-Process -FilePath $Exe -ArgumentList $Args -Wait -PassThru -WindowStyle Hidden
+              $global:LASTEXITCODE = $proc.ExitCode
+          }
+
+          '@
+          $text = $helper + $text
+          $text = $text.Replace('& (Join-Path $app "PDFAccessibilityHelper.exe") --diagnostics $diag', 'Invoke-FrozenGui (Join-Path $app "PDFAccessibilityHelper.exe") @("--diagnostics", $diag)')
+          $text = $text.Replace('& (Join-Path $app "PDFAccessibilityHelper.exe") --runtime-self-test $runtimeSelfTest', 'Invoke-FrozenGui (Join-Path $app "PDFAccessibilityHelper.exe") @("--runtime-self-test", $runtimeSelfTest)')
+          $text = $text.Replace('& (Join-Path $app "PDFAccessibilityHelper.exe") --batch (Join-Path $root "test-corpus\\input") $corpusOutput', 'Invoke-FrozenGui (Join-Path $app "PDFAccessibilityHelper.exe") @("--batch", (Join-Path $root "test-corpus\\input"), $corpusOutput)')
+          Set-Content -Path $path -Value $text -Encoding UTF8
+
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
