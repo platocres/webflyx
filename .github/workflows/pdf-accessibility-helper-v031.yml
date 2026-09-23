@@ -1,4 +1,4 @@
-name: Build PDF Accessibility Helper v0.3.2
+name: Build PDF Accessibility Helper v0.3.3
 
 on:
   workflow_dispatch:
@@ -21,7 +21,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Reconstruct verified v0.3.2 source archive
+      - name: Reconstruct verified source archive
         shell: powershell
         run: |
           $ordered = @(
@@ -44,6 +44,15 @@ jobs:
           }
           Expand-Archive "$PWD\pah-source.zip" "$PWD\buildsrc" -Force
 
+      - name: Apply v0.3.3 stop-teardown fixes
+        shell: powershell
+        working-directory: buildsrc/pdf-accessibility-helper
+        run: |
+          git apply "$env:GITHUB_WORKSPACE\pah-v032\v033.patch"
+          if ((Get-Content ".\src\pdf_accessibility_helper\__init__.py" -Raw) -notmatch '0\.3\.3') {
+            throw "v0.3.3 patch did not apply"
+          }
+
       - name: Install external build dependencies
         shell: powershell
         working-directory: buildsrc/pdf-accessibility-helper
@@ -64,11 +73,11 @@ jobs:
         shell: powershell
         working-directory: buildsrc/pdf-accessibility-helper
         run: |
-          Compress-Archive -Path .\dist\PDFAccessibilityHelper\* -DestinationPath .\dist\PDF-Accessibility-Helper-v0.3.2-Windows-x64.zip -Force
+          Compress-Archive -Path .\dist\PDFAccessibilityHelper\* -DestinationPath .\dist\PDF-Accessibility-Helper-v0.3.3-Windows-x64.zip -Force
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PDF-Accessibility-Helper-v0.3.2-Windows-x64
-          path: buildsrc/pdf-accessibility-helper/dist/PDF-Accessibility-Helper-v0.3.2-Windows-x64.zip
+          name: PDF-Accessibility-Helper-v0.3.3-Windows-x64
+          path: buildsrc/pdf-accessibility-helper/dist/PDF-Accessibility-Helper-v0.3.3-Windows-x64.zip
           if-no-files-found: error
           retention-days: 30
