@@ -1,0 +1,75 @@
+name: Build PDF Accessibility Helper
+
+on:
+  push:
+    branches:
+      - build/pdf-accessibility-helper-v0.2
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 75
+
+    steps:
+      - name: Check out scratch branch
+        uses: actions/checkout@v4
+        with:
+          ref: build/pdf-accessibility-helper-v0.2
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Reconstruct source archive
+        shell: powershell
+        run: |
+          $parts = Get-ChildItem .\pah-build\chunk_*.b64 | Sort-Object Name
+          if ($parts.Count -ne 7) { throw "Expected 7 source chunks, found $($parts.Count)." }
+          $b64 = ($parts | ForEach-Object { (Get-Content $_.FullName -Raw).Trim() }) -join ""
+          [IO.File]::WriteAllBytes("$PWD\pah-src.zip", [Convert]::FromBase64String($b64))
+          Expand-Archive .\pah-src.zip -DestinationPath .\work -Force
+          if (-not (Test-Path .\work\pdf-accessibility-helper\pyproject.toml)) {
+            throw "Source archive did not reconstruct correctly."
+          }
+
+      - name: Install external build dependencies
+        shell: powershell
+        run: |
+          choco install tesseract -y --no-progress
+          choco install temurin21jre -y --no-progress
+          $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+          tesseract --version
+          java -version
+
+      - name: Build, diagnose, and run adversarial corpus
+        shell: powershell
+        working-directory: work/pdf-accessibility-helper
+        run: |
+          .\scripts\build_windows.ps1
+
+      - name: Zip portable Windows app
+        shell: powershell
+        working-directory: work/pdf-accessibility-helper
+        run: |
+          Compress-Archive -Path .\dist\PDFAccessibilityHelper\* -DestinationPath .\dist\PDFAccessibilityHelper-Windows-x64.zip -Force
+
+      - name: Upload portable build
+        uses: actions/upload-artifact@v4
+        with:
+          name: PDFAccessibilityHelper-Windows-x64
+          path: work/pdf-accessibility-helper/dist/PDFAccessibilityHelper-Windows-x64.zip
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload corpus reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: PDF-Accessibility-Helper-test-reports
+          path: |
+            work/pdf-accessibility-helper/dist/PDFAccessibilityHelper/build-diagnostics.json
+            work/pdf-accessibility-helper/test-corpus/output/**
+          if-no-files-found: warn
+          retention-days: 30
