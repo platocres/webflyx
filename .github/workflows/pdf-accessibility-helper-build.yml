@@ -5,6 +5,9 @@ on:
     branches:
       - build/pdf-accessibility-helper-v0.2
   workflow_dispatch:
+  pull_request:
+    branches:
+      - main
 
 jobs:
   build:
