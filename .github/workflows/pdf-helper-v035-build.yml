@@ -87,3 +87,5 @@ jobs:
           path: source/pdf-accessibility-helper/PDF-Accessibility-Helper-v0.3.5-Windows-Portable.zip
           if-no-files-found: error
           retention-days: 7
+
+# Source chunks complete; build trigger.
