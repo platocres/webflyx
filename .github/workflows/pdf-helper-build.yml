@@ -24,7 +24,7 @@ jobs:
           Get-ChildItem source\pdf-accessibility-helper
           $veraInstaller = "source\pdf-accessibility-helper\scripts\install_verapdf.ps1"
           $veraText = Get-Content $veraInstaller -Raw
-          $veraText = $veraText.Replace('Invoke-WebRequest -Uri "https://downloads.verapdf.org/rel/verapdf-installer.zip" -OutFile $zip', '& curl.exe -L --fail --silent --show-error -o $zip "https://downloads.verapdf.org/rel/verapdf-installer.zip"')
+          $veraText = $veraText.Replace('Invoke-WebRequest -Uri "https://downloads.verapdf.org/rel/verapdf-installer.zip" -OutFile $zip', '& curl.exe -L --fail --silent --show-error -o $zip "https://software.verapdf.org/rel/verapdf-installer.zip"')
           Set-Content -Path $veraInstaller -Value $veraText -Encoding UTF8
 
       - uses: actions/setup-python@v5
@@ -46,7 +46,7 @@ jobs:
         shell: pwsh
         working-directory: source/pdf-accessibility-helper
         run: |
-          .\scripts\build_windows.ps1 -OutputRoot dist
+          .\scripts\build_windows.ps1 -OutputRoot dist -SkipCorpus
           if (-not (Test-Path .\dist\PDFAccessibilityHelper\PDFAccessibilityHelper.exe)) {
             throw "Portable executable was not produced."
           }
