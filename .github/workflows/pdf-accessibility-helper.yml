@@ -75,7 +75,7 @@ jobs:
               if (($i + 1) -lt $lines.Count -and $lines[$i + 1].Trim().StartsWith('if ($LASTEXITCODE -ne 0)')) { $i++ }
               continue
             }
-            if ($trimmed -eq '& (Join-Path $app "PDFAccessibilityHelper.exe") --batch (Join-Path $root "test-corpus\\input") $corpusOutput') {
+            if ($trimmed.StartsWith('& (Join-Path $app "PDFAccessibilityHelper.exe") --batch ')) {
               $out.Add('    $corpusInput = Join-Path $root "test-corpus\\input"')
               $out.Add('    $batchProc = Start-Process -FilePath $frozenExe -ArgumentList @("--batch", $corpusInput, $corpusOutput) -Wait -PassThru')
               $out.Add('    if ($batchProc.ExitCode -ne 0) { throw "Corpus run aborted with exit code $($batchProc.ExitCode)" }')
