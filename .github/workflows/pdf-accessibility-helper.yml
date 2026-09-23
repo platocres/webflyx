@@ -59,6 +59,14 @@ jobs:
           tesseract --version
           java -version
 
+      - name: Enable console diagnostics for CI
+        shell: powershell
+        run: |
+          $build = ".\pdf-accessibility-helper\scripts\build_windows.ps1"
+          $text = Get-Content $build -Raw
+          $text = $text.Replace("--windowed", "--console")
+          Set-Content -Path $build -Value $text -Encoding UTF8
+
       - name: Build portable app and run adversarial corpus
         shell: powershell
         run: |
