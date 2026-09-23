@@ -1,4 +1,4 @@
-name: Build PDF Accessibility Helper v0.3.1
+name: Build PDF Accessibility Helper v0.3.2
 
 on:
   workflow_dispatch:
@@ -6,37 +6,47 @@ on:
     branches:
       - build/pdf-accessibility-helper-v0.3.1
     paths:
-      - "pdf-accessibility-helper-v0.3.1.zip.b64.part*"
+      - "pah-v032/**"
       - ".github/workflows/pdf-accessibility-helper-v031.yml"
 
 jobs:
   build:
     runs-on: windows-latest
-    timeout-minutes: 60
+    timeout-minutes: 75
 
     steps:
       - uses: actions/checkout@v4
-
-      - name: Reconstruct source archive
-        shell: powershell
-        run: |
-          $parts = Get-ChildItem "pdf-accessibility-helper-v0.3.1.zip.b64.part*" | Sort-Object Name
-          if ($parts.Count -ne 8) { throw "Expected 8 source chunks, found $($parts.Count)" }
-          $b64 = ($parts | ForEach-Object { Get-Content $_.FullName -Raw }) -join ""
-          [IO.File]::WriteAllBytes("pdf-accessibility-helper-v0.3.1.zip", [Convert]::FromBase64String($b64))
-          $hash = (Get-FileHash "pdf-accessibility-helper-v0.3.1.zip" -Algorithm SHA256).Hash.ToLower()
-          if ($hash -ne "7ec684c44729a85855c79cc827498c81d329e47e6e74e464a9a7f7218958d6ff") {
-            throw "Source archive checksum mismatch: $hash"
-          }
-          Expand-Archive "pdf-accessibility-helper-v0.3.1.zip" -DestinationPath . -Force
 
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
+      - name: Reconstruct verified v0.3.2 source archive
+        shell: powershell
+        run: |
+          $ordered = @(
+            "pah-v032/chunk_00.b64",
+            "pah-v032/chunk_01.b64",
+            "pah-v032/chunk_02.b64",
+            "pah-v032/chunk_03.b64",
+            "pah-v032/chunk_04p0.b64",
+            "pah-v032/chunk_04p1.b64",
+            "pah-v032/chunk_04p2.b64",
+            "pah-v032/chunk_04p3.b64",
+            "pah-v032/chunk_05.b64",
+            "pah-v032/chunk_06.b64"
+          )
+          $b64 = ($ordered | ForEach-Object { Get-Content $_ -Raw }) -join ""
+          [IO.File]::WriteAllBytes("$PWD\pah-source.zip", [Convert]::FromBase64String($b64))
+          $sha = (Get-FileHash "$PWD\pah-source.zip" -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($sha -ne "aa6f52d7d8202103020f5621240db43d67b516e945db81496b3610f960b958d5") {
+            throw "Source archive SHA256 mismatch: $sha"
+          }
+          Expand-Archive "$PWD\pah-source.zip" "$PWD\buildsrc" -Force
+
       - name: Install external build dependencies
         shell: powershell
-        working-directory: pdf-accessibility-helper
+        working-directory: buildsrc/pdf-accessibility-helper
         run: |
           choco install tesseract -y --no-progress
           choco install temurin21jre -y --no-progress
@@ -46,19 +56,19 @@ jobs:
 
       - name: Build, verify hidden subprocesses, and run adversarial corpus
         shell: powershell
-        working-directory: pdf-accessibility-helper
+        working-directory: buildsrc/pdf-accessibility-helper
         run: |
           .\scripts\build_windows.ps1
 
       - name: Create portable ZIP
         shell: powershell
-        working-directory: pdf-accessibility-helper
+        working-directory: buildsrc/pdf-accessibility-helper
         run: |
-          Compress-Archive -Path .\dist\PDFAccessibilityHelper\* -DestinationPath .\dist\PDF-Accessibility-Helper-Windows-Portable-v0.3.1.zip -Force
+          Compress-Archive -Path .\dist\PDFAccessibilityHelper\* -DestinationPath .\dist\PDF-Accessibility-Helper-v0.3.2-Windows-x64.zip -Force
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PDF-Accessibility-Helper-Windows-Portable-v0.3.1
-          path: pdf-accessibility-helper/dist/PDF-Accessibility-Helper-Windows-Portable-v0.3.1.zip
+          name: PDF-Accessibility-Helper-v0.3.2-Windows-x64
+          path: buildsrc/pdf-accessibility-helper/dist/PDF-Accessibility-Helper-v0.3.2-Windows-x64.zip
           if-no-files-found: error
           retention-days: 30
