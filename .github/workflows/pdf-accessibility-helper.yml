@@ -48,6 +48,11 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Patch fallback config and corpus acceptance gates
+        shell: powershell
+        run: |
+          python .\\pah-build2\\patch_extracted_source.py
+
       - name: Install external build dependencies
         shell: powershell
         run: |
