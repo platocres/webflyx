@@ -1,9 +1,9 @@
-name: Build PDF Accessibility Helper v0.4.0
+name: Build PDF Accessibility Helper v0.4.1
 
 on:
   push:
     branches:
-      - build/pdf-accessibility-helper-v0.4.0
+      - build/pdf-accessibility-helper-v0.4.1
   workflow_dispatch:
 
 jobs:
@@ -64,6 +64,89 @@ jobs:
           )
           Set-Content $installerPath -Value $installerScript -Encoding UTF8
 
+          # v0.4.1: keep subprocess.Popen class-compatible. v0.4.0 replaced it
+          # with a plain function, which breaks asyncio when OCRmyPDF imports it
+          # in the frozen Windows engine ("base_events" / "code must be code").
+          $runtimePath = ".\src\pdf_accessibility_helper\runtime.py"
+          $runtimeText = Get-Content $runtimePath -Raw
+          $oldStart = '        def hidden_popen(*args, **kwargs):  # type: ignore[no-untyped-def]'
+          $oldEnd = '        subprocess.Popen = hidden_popen  # type: ignore[assignment]'
+          $startIndex = $runtimeText.IndexOf($oldStart)
+          $endIndex = $runtimeText.IndexOf($oldEnd)
+          if ($startIndex -lt 0 -or $endIndex -lt 0) { throw "Could not locate the old hidden_popen implementation." }
+          $endIndex += $oldEnd.Length
+          $newBlock = @'
+        class HiddenPopen(_ORIGINAL_POPEN):
+            """Popen-compatible subclass that hides Windows helper consoles.
+
+            Keeping subprocess.Popen as a class is important because asyncio
+            and other modules subclass it during import.
+            """
+
+            def __init__(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+                if _CHILD_LAUNCH_BLOCKED.is_set():
+                    raise ChildLaunchBlocked("Processing was stopped; helper process launch was blocked.")
+
+                creationflags = int(kwargs.get("creationflags", 0) or 0)
+                creationflags &= ~int(getattr(subprocess, "CREATE_NEW_CONSOLE", 0) or 0)
+                creationflags |= int(getattr(subprocess, "CREATE_NO_WINDOW", 0) or 0)
+                kwargs["creationflags"] = creationflags
+
+                startupinfo = kwargs.get("startupinfo")
+                if startupinfo is None:
+                    startupinfo = subprocess.STARTUPINFO()
+                else:
+                    try:
+                        startupinfo = copy.copy(startupinfo)
+                    except Exception:
+                        pass
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                startupinfo.wShowWindow = getattr(subprocess, "SW_HIDE", 0)
+                kwargs["startupinfo"] = startupinfo
+
+                if kwargs.get("stdin") is None:
+                    kwargs["stdin"] = subprocess.DEVNULL
+
+                super().__init__(*args, **kwargs)
+                _register_child(self)
+
+        subprocess.Popen = HiddenPopen  # type: ignore[assignment]
+'@
+          $runtimeText = $runtimeText.Substring(0, $startIndex) + $newBlock + $runtimeText.Substring($endIndex)
+          Set-Content $runtimePath -Value $runtimeText -Encoding UTF8
+
+          # Add deterministic PDF/UA MarkInfo metadata while the candidate is open.
+          $pipelinePath = ".\src\pdf_accessibility_helper\pipeline.py"
+          $pipelineText = Get-Content $pipelinePath -Raw
+          $markNeedle = @'
+        if not root.get("/Lang", None):
+            root["/Lang"] = pikepdf.String("en-US")
+
+        viewer = root.get("/ViewerPreferences", None)
+'@
+          $markReplacement = @'
+        if not root.get("/Lang", None):
+            root["/Lang"] = pikepdf.String("en-US")
+
+        mark_info = root.get("/MarkInfo", None)
+        if mark_info is None:
+            mark_info = pikepdf.Dictionary()
+            root["/MarkInfo"] = mark_info
+        mark_info["/Marked"] = True
+
+        viewer = root.get("/ViewerPreferences", None)
+'@
+          if (-not $pipelineText.Contains($markNeedle)) { throw "Could not locate metadata insertion point." }
+          $pipelineText = $pipelineText.Replace($markNeedle, $markReplacement)
+          Set-Content $pipelinePath -Value $pipelineText -Encoding UTF8
+
+          # Bump the packaged build identity.
+          $initPath = ".\src\pdf_accessibility_helper\__init__.py"
+          (Get-Content $initPath -Raw).Replace("0.4.0", "0.4.1") | Set-Content $initPath -Encoding UTF8
+          (Get-Content ".\pyproject.toml" -Raw).Replace("0.4.0", "0.4.1") | Set-Content ".\pyproject.toml" -Encoding UTF8
+          $buildVersionPath = ".\scripts\build_windows.ps1"
+          (Get-Content $buildVersionPath -Raw).Replace("0.4.0 - adaptive performance build", "0.4.1 - adaptive performance build") | Set-Content $buildVersionPath -Encoding UTF8
+
           # PDFAccessibilityEngine.exe is intentionally a GUI-subsystem binary.
           # PowerShell's call operator does not wait for GUI executables, so the
           # original build script raced the diagnostics/corpus output files.
@@ -114,18 +197,33 @@ jobs:
 
           .\scripts\build_windows.ps1
 
+          # v0.4.1 release gate: OCR fixtures must actually complete in the
+          # frozen Windows build. Only malformed + password-protected fixtures
+          # are expected to fail.
+          $corpusResult = Get-Content ".\test-corpus\output\batch-result.json" -Raw | ConvertFrom-Json
+          if ($corpusResult.processed -ne 11) { throw "Corpus did not process all 11 fixtures." }
+          if ($corpusResult.failed -ne 2) { throw "Expected exactly 2 intentional corpus failures; got $($corpusResult.failed)." }
+          $corpusCsv = Import-Csv ".\test-corpus\output\_accessibility_reports\Accessibility_Remediation_Summary.csv"
+          foreach ($fixture in @("02_scanned_handout.pdf", "03_mixed_text_and_scan.pdf", "09_blank_page.pdf")) {
+            $row = $corpusCsv | Where-Object { $_.source_file -eq $fixture } | Select-Object -First 1
+            if (-not $row) { throw "Missing corpus row for $fixture." }
+            if ($row.ocr_attempted -ne "yes") { throw "$fixture did not exercise OCR." }
+            if ($row.status -eq "failed") { throw "$fixture failed OCR/remediation: $($row.error)" }
+            if (-not $row.output_file) { throw "$fixture did not produce an output PDF." }
+          }
+
       - name: Create portable ZIP
         shell: pwsh
         working-directory: work/pah040
         run: |
-          $zip = ".\dist\PDF-Accessibility-Helper-v0.4.0-Windows-Portable.zip"
+          $zip = ".\dist\PDF-Accessibility-Helper-v0.4.1-Windows-Portable.zip"
           if (Test-Path $zip) { Remove-Item $zip -Force }
           Compress-Archive -Path ".\dist\PDFAccessibilityHelper\*" -DestinationPath $zip -Force
           if (-not (Test-Path $zip)) { throw "Portable ZIP was not created." }
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PDF-Accessibility-Helper-v0.4.0-Windows-Portable
-          path: work/pah040/dist/PDF-Accessibility-Helper-v0.4.0-Windows-Portable.zip
+          name: PDF-Accessibility-Helper-v0.4.1-Windows-Portable
+          path: work/pah040/dist/PDF-Accessibility-Helper-v0.4.1-Windows-Portable.zip
           if-no-files-found: error
           retention-days: 30
