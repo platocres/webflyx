@@ -3,7 +3,7 @@ name: Build PDF Accessibility Helper v0.4.1
 on:
   push:
     branches:
-      - build/pdf-accessibility-helper-v0.4.1
+      - build/pdf-accessibility-helper-v0.4.0
   workflow_dispatch:
 
 jobs:
@@ -54,8 +54,8 @@ jobs:
         shell: pwsh
         working-directory: work/pah040
         run: |
-          # downloads.verapdf.org currently redirects through HTTP; curl follows
-          # the official redirect while PowerShell 7 refuses it by default.
+          # Follow the official veraPDF redirect with curl; PowerShell 7 rejects
+          # the redirect because the intermediate URL uses HTTP.
           $installerPath = ".\scripts\install_verapdf.ps1"
           $installerScript = Get-Content $installerPath -Raw
           $installerScript = $installerScript.Replace(
@@ -64,94 +64,29 @@ jobs:
           )
           Set-Content $installerPath -Value $installerScript -Encoding UTF8
 
-          # v0.4.1: keep subprocess.Popen class-compatible. v0.4.0 replaced it
-          # with a plain function, which breaks asyncio when OCRmyPDF imports it
-          # in the frozen Windows engine ("base_events" / "code must be code").
-          $runtimePath = ".\src\pdf_accessibility_helper\runtime.py"
-          $runtimeText = Get-Content $runtimePath -Raw
-          $oldStart = '        def hidden_popen(*args, **kwargs):  # type: ignore[no-untyped-def]'
-          $oldEnd = '        subprocess.Popen = hidden_popen  # type: ignore[assignment]'
-          $startIndex = $runtimeText.IndexOf($oldStart)
-          $endIndex = $runtimeText.IndexOf($oldEnd)
-          if ($startIndex -lt 0 -or $endIndex -lt 0) { throw "Could not locate the old hidden_popen implementation." }
-          $endIndex += $oldEnd.Length
-          $newBlock = @'
-        class HiddenPopen(_ORIGINAL_POPEN):
-            """Popen-compatible subclass that hides Windows helper consoles.
+          # v0.4.0 installed the console-suppression hook before asyncio was
+          # imported. That hook replaces subprocess.Popen, while asyncio's
+          # Windows support subclasses subprocess.Popen during import. Import
+          # asyncio first so the standard library captures the real Popen class.
+          $launcherPath = ".\launcher.py"
+          $launcher = Get-Content $launcherPath -Raw
+          if ($launcher -notmatch '(?m)^import asyncio$') {
+            $launcher = $launcher.Replace("import argparse", "import argparse" + [Environment]::NewLine + "import asyncio")
+          }
+          Set-Content $launcherPath -Value $launcher -Encoding UTF8
+          if ((Get-Content $launcherPath -Raw) -notmatch '(?m)^import asyncio$') {
+            throw "Failed to install the asyncio-before-subprocess compatibility fix."
+          }
 
-            Keeping subprocess.Popen as a class is important because asyncio
-            and other modules subclass it during import.
-            """
-
-            def __init__(self, *args, **kwargs):  # type: ignore[no-untyped-def]
-                if _CHILD_LAUNCH_BLOCKED.is_set():
-                    raise ChildLaunchBlocked("Processing was stopped; helper process launch was blocked.")
-
-                creationflags = int(kwargs.get("creationflags", 0) or 0)
-                creationflags &= ~int(getattr(subprocess, "CREATE_NEW_CONSOLE", 0) or 0)
-                creationflags |= int(getattr(subprocess, "CREATE_NO_WINDOW", 0) or 0)
-                kwargs["creationflags"] = creationflags
-
-                startupinfo = kwargs.get("startupinfo")
-                if startupinfo is None:
-                    startupinfo = subprocess.STARTUPINFO()
-                else:
-                    try:
-                        startupinfo = copy.copy(startupinfo)
-                    except Exception:
-                        pass
-                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-                startupinfo.wShowWindow = getattr(subprocess, "SW_HIDE", 0)
-                kwargs["startupinfo"] = startupinfo
-
-                if kwargs.get("stdin") is None:
-                    kwargs["stdin"] = subprocess.DEVNULL
-
-                super().__init__(*args, **kwargs)
-                _register_child(self)
-
-        subprocess.Popen = HiddenPopen  # type: ignore[assignment]
-'@
-          $runtimeText = $runtimeText.Substring(0, $startIndex) + $newBlock + $runtimeText.Substring($endIndex)
-          Set-Content $runtimePath -Value $runtimeText -Encoding UTF8
-
-          # Add deterministic PDF/UA MarkInfo metadata while the candidate is open.
-          $pipelinePath = ".\src\pdf_accessibility_helper\pipeline.py"
-          $pipelineText = Get-Content $pipelinePath -Raw
-          $markNeedle = @'
-        if not root.get("/Lang", None):
-            root["/Lang"] = pikepdf.String("en-US")
-
-        viewer = root.get("/ViewerPreferences", None)
-'@
-          $markReplacement = @'
-        if not root.get("/Lang", None):
-            root["/Lang"] = pikepdf.String("en-US")
-
-        mark_info = root.get("/MarkInfo", None)
-        if mark_info is None:
-            mark_info = pikepdf.Dictionary()
-            root["/MarkInfo"] = mark_info
-        mark_info["/Marked"] = True
-
-        viewer = root.get("/ViewerPreferences", None)
-'@
-          if (-not $pipelineText.Contains($markNeedle)) { throw "Could not locate metadata insertion point." }
-          $pipelineText = $pipelineText.Replace($markNeedle, $markReplacement)
-          Set-Content $pipelinePath -Value $pipelineText -Encoding UTF8
-
-          # Bump the packaged build identity.
+          # Bump package/build identity to v0.4.1.
           $initPath = ".\src\pdf_accessibility_helper\__init__.py"
           (Get-Content $initPath -Raw).Replace("0.4.0", "0.4.1") | Set-Content $initPath -Encoding UTF8
           (Get-Content ".\pyproject.toml" -Raw).Replace("0.4.0", "0.4.1") | Set-Content ".\pyproject.toml" -Encoding UTF8
           $buildVersionPath = ".\scripts\build_windows.ps1"
           (Get-Content $buildVersionPath -Raw).Replace("0.4.0 - adaptive performance build", "0.4.1 - adaptive performance build") | Set-Content $buildVersionPath -Encoding UTF8
 
-          # PDFAccessibilityEngine.exe is intentionally a GUI-subsystem binary.
-          # PowerShell's call operator does not wait for GUI executables, so the
-          # original build script raced the diagnostics/corpus output files.
-          # Patch those three self-test invocations line-by-line and assert that
-          # every replacement actually happened.
+          # The engine is a GUI-subsystem executable. Invoke it synchronously
+          # during CI so diagnostics and corpus files exist before they are read.
           $buildPath = ".\scripts\build_windows.ps1"
           $lines = Get-Content $buildPath
           $patched = foreach ($line in $lines) {
@@ -197,12 +132,13 @@ jobs:
 
           .\scripts\build_windows.ps1
 
-          # v0.4.1 release gate: OCR fixtures must actually complete in the
-          # frozen Windows build. Only malformed + password-protected fixtures
-          # are expected to fail.
+          # Release gate: only the intentionally malformed and encrypted PDFs
+          # may fail. Scanned/mixed/blank fixtures must exercise OCR and produce
+          # finished PDFs in the actual frozen Windows executable.
           $corpusResult = Get-Content ".\test-corpus\output\batch-result.json" -Raw | ConvertFrom-Json
           if ($corpusResult.processed -ne 11) { throw "Corpus did not process all 11 fixtures." }
           if ($corpusResult.failed -ne 2) { throw "Expected exactly 2 intentional corpus failures; got $($corpusResult.failed)." }
+
           $corpusCsv = Import-Csv ".\test-corpus\output\_accessibility_reports\Accessibility_Remediation_Summary.csv"
           foreach ($fixture in @("02_scanned_handout.pdf", "03_mixed_text_and_scan.pdf", "09_blank_page.pdf")) {
             $row = $corpusCsv | Where-Object { $_.source_file -eq $fixture } | Select-Object -First 1
