@@ -131,13 +131,12 @@ def main() -> None:
         '\tprocShellExecuteW         = shell32.NewProc("ShellExecuteW")\n',
         "shell32 declarations",
     )
-    old_open = r'''func openPath(path string) {
-	if path == "" {
-		return
-	}
-	syscall.StartProcess("C:\Windows\explorer.exe", []string{"explorer.exe", path}, &syscall.ProcAttr{Files: []uintptr{0, 1, 2}})
-}
-'''
+    open_start = s.find("func openPath(path string) {")
+    open_end_marker = "\n}\n\nfunc wndProc"
+    open_end = s.find(open_end_marker, open_start)
+    if open_start < 0 or open_end < 0:
+        raise SystemExit("Could not locate openPath function")
+    open_end += 3
     new_open = r'''func openPath(owner syscall.Handle, path string) error {
 	path = strings.TrimSpace(path)
 	if path == "" {
@@ -164,7 +163,7 @@ def main() -> None:
 	return nil
 }
 '''
-    s = replace_once(s, old_open, new_open, "openPath function")
+    s = s[:open_start] + new_open + s[open_end:]
     old_handlers = '''\t\tcase ID_OPEN:
 \t\t\tstate.mu.Lock()
 \t\t\tp := state.outputDir
