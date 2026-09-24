@@ -54,33 +54,63 @@ jobs:
         shell: pwsh
         working-directory: work/pah040
         run: |
-          # PowerShell 7 rejects the redirect currently used by downloads.verapdf.org.
-          # Use Windows curl with redirect-following for the official installer instead.
-          $installerScript = Get-Content ".\scripts\install_verapdf.ps1" -Raw
-          $old = 'Invoke-WebRequest -Uri "https://downloads.verapdf.org/rel/verapdf-installer.zip" -OutFile $zip'
-          $new = 'curl.exe -L --fail --silent --show-error "https://downloads.verapdf.org/rel/verapdf-installer.zip" -o $zip; if ($LASTEXITCODE -ne 0) { throw "veraPDF download failed with exit code $LASTEXITCODE" }'
-          if (-not $installerScript.Contains($old)) { throw "Could not patch veraPDF downloader." }
-          $installerScript = $installerScript.Replace($old, $new)
-          Set-Content ".\scripts\install_verapdf.ps1" -Value $installerScript -Encoding UTF8
+          # downloads.verapdf.org currently redirects through HTTP; curl follows
+          # the official redirect while PowerShell 7 refuses it by default.
+          $installerPath = ".\scripts\install_verapdf.ps1"
+          $installerScript = Get-Content $installerPath -Raw
+          $installerScript = $installerScript.Replace(
+            'Invoke-WebRequest -Uri "https://downloads.verapdf.org/rel/verapdf-installer.zip" -OutFile $zip',
+            'curl.exe -L --fail --silent --show-error "https://downloads.verapdf.org/rel/verapdf-installer.zip" -o $zip; if ($LASTEXITCODE -ne 0) { throw "veraPDF download failed with exit code $LASTEXITCODE" }'
+          )
+          Set-Content $installerPath -Value $installerScript -Encoding UTF8
 
-          # The engine is a Windows GUI-subsystem executable. PowerShell does not
-          # synchronously wait for GUI apps invoked with &, so the original build
-          # script could race its diagnostics/corpus files. Make every engine
-          # self-test explicitly wait for completion.
-          $buildScript = Get-Content ".\scripts\build_windows.ps1" -Raw
-          $buildScript = $buildScript.Replace(
-            '& $engine --diagnostics $diag' + [Environment]::NewLine + 'if ($LASTEXITCODE -ne 0) { throw "Frozen-app diagnostics failed with exit code $LASTEXITCODE" }',
-            '$p = Start-Process -FilePath $engine -ArgumentList @("--diagnostics", $diag) -Wait -PassThru' + [Environment]::NewLine + 'if ($p.ExitCode -ne 0) { throw "Frozen-app diagnostics failed with exit code $($p.ExitCode)" }'
-          )
-          $buildScript = $buildScript.Replace(
-            '& $engine --runtime-self-test $runtimeSelfTest' + [Environment]::NewLine + 'if ($LASTEXITCODE -ne 0) { throw "Hidden-child runtime self-test failed with exit code $LASTEXITCODE" }',
-            '$p = Start-Process -FilePath $engine -ArgumentList @("--runtime-self-test", $runtimeSelfTest) -Wait -PassThru' + [Environment]::NewLine + 'if ($p.ExitCode -ne 0) { throw "Hidden-child runtime self-test failed with exit code $($p.ExitCode)" }'
-          )
-          $buildScript = $buildScript.Replace(
-            '& $engine --batch (Join-Path $root "test-corpus\input") $corpusOutput' + [Environment]::NewLine + 'if ($LASTEXITCODE -ne 0) { throw "Corpus run aborted with exit code $LASTEXITCODE" }',
-            '$p = Start-Process -FilePath $engine -ArgumentList @("--batch", (Join-Path $root "test-corpus\input"), $corpusOutput) -Wait -PassThru' + [Environment]::NewLine + 'if ($p.ExitCode -ne 0) { throw "Corpus run aborted with exit code $($p.ExitCode)" }'
-          )
-          Set-Content ".\scripts\build_windows.ps1" -Value $buildScript -Encoding UTF8
+          # PDFAccessibilityEngine.exe is intentionally a GUI-subsystem binary.
+          # PowerShell's call operator does not wait for GUI executables, so the
+          # original build script raced the diagnostics/corpus output files.
+          # Patch those three self-test invocations line-by-line and assert that
+          # every replacement actually happened.
+          $buildPath = ".\scripts\build_windows.ps1"
+          $lines = Get-Content $buildPath
+          $patched = foreach ($line in $lines) {
+            $t = $line.Trim()
+            if ($t -eq '& $engine --diagnostics $diag') {
+              'Write-Host "Running frozen-engine diagnostics..."'
+              '$p = Start-Process -FilePath $engine -ArgumentList @("--diagnostics", $diag) -Wait -PassThru'
+              continue
+            }
+            if ($t -eq 'if ($LASTEXITCODE -ne 0) { throw "Frozen-app diagnostics failed with exit code $LASTEXITCODE" }') {
+              'if ($p.ExitCode -ne 0) { throw "Frozen-app diagnostics failed with exit code $($p.ExitCode)" }'
+              continue
+            }
+            if ($t -eq '& $engine --runtime-self-test $runtimeSelfTest') {
+              'Write-Host "Running hidden-child runtime self-test..."'
+              '$p = Start-Process -FilePath $engine -ArgumentList @("--runtime-self-test", $runtimeSelfTest) -Wait -PassThru'
+              continue
+            }
+            if ($t -eq 'if ($LASTEXITCODE -ne 0) { throw "Hidden-child runtime self-test failed with exit code $LASTEXITCODE" }') {
+              'if ($p.ExitCode -ne 0) { throw "Hidden-child runtime self-test failed with exit code $($p.ExitCode)" }'
+              continue
+            }
+            if ($t -eq '& $engine --batch (Join-Path $root "test-corpus\input") $corpusOutput') {
+              'Write-Host "Running frozen engine over adversarial corpus..."'
+              '$p = Start-Process -FilePath $engine -ArgumentList @("--batch", (Join-Path $root "test-corpus\input"), $corpusOutput) -Wait -PassThru'
+              continue
+            }
+            if ($t -eq 'if ($LASTEXITCODE -ne 0) { throw "Corpus run aborted with exit code $LASTEXITCODE" }') {
+              'if ($p.ExitCode -ne 0) { throw "Corpus run aborted with exit code $($p.ExitCode)" }'
+              continue
+            }
+            $line
+          }
+          Set-Content $buildPath -Value $patched -Encoding UTF8
+
+          $patchedText = Get-Content $buildPath -Raw
+          if ($patchedText -match '(?m)^\s*& \$engine --(diagnostics|runtime-self-test|batch)') {
+            throw "GUI-engine wait patch did not apply completely."
+          }
+          if (($patchedText | Select-String -Pattern 'Start-Process -FilePath \$engine' -AllMatches).Matches.Count -ne 3) {
+            throw "Expected exactly three synchronous engine self-test invocations."
+          }
 
           .\scripts\build_windows.ps1
 
