@@ -63,6 +63,25 @@ jobs:
           $installerScript = $installerScript.Replace($old, $new)
           Set-Content ".\scripts\install_verapdf.ps1" -Value $installerScript -Encoding UTF8
 
+          # The engine is a Windows GUI-subsystem executable. PowerShell does not
+          # synchronously wait for GUI apps invoked with &, so the original build
+          # script could race its diagnostics/corpus files. Make every engine
+          # self-test explicitly wait for completion.
+          $buildScript = Get-Content ".\scripts\build_windows.ps1" -Raw
+          $buildScript = $buildScript.Replace(
+            '& $engine --diagnostics $diag' + [Environment]::NewLine + 'if ($LASTEXITCODE -ne 0) { throw "Frozen-app diagnostics failed with exit code $LASTEXITCODE" }',
+            '$p = Start-Process -FilePath $engine -ArgumentList @("--diagnostics", $diag) -Wait -PassThru' + [Environment]::NewLine + 'if ($p.ExitCode -ne 0) { throw "Frozen-app diagnostics failed with exit code $($p.ExitCode)" }'
+          )
+          $buildScript = $buildScript.Replace(
+            '& $engine --runtime-self-test $runtimeSelfTest' + [Environment]::NewLine + 'if ($LASTEXITCODE -ne 0) { throw "Hidden-child runtime self-test failed with exit code $LASTEXITCODE" }',
+            '$p = Start-Process -FilePath $engine -ArgumentList @("--runtime-self-test", $runtimeSelfTest) -Wait -PassThru' + [Environment]::NewLine + 'if ($p.ExitCode -ne 0) { throw "Hidden-child runtime self-test failed with exit code $($p.ExitCode)" }'
+          )
+          $buildScript = $buildScript.Replace(
+            '& $engine --batch (Join-Path $root "test-corpus\input") $corpusOutput' + [Environment]::NewLine + 'if ($LASTEXITCODE -ne 0) { throw "Corpus run aborted with exit code $LASTEXITCODE" }',
+            '$p = Start-Process -FilePath $engine -ArgumentList @("--batch", (Join-Path $root "test-corpus\input"), $corpusOutput) -Wait -PassThru' + [Environment]::NewLine + 'if ($p.ExitCode -ne 0) { throw "Corpus run aborted with exit code $($p.ExitCode)" }'
+          )
+          Set-Content ".\scripts\build_windows.ps1" -Value $buildScript -Encoding UTF8
+
           .\scripts\build_windows.ps1
 
       - name: Create portable ZIP
