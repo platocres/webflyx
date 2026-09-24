@@ -1,0 +1,73 @@
+name: Build PDF Accessibility Helper v0.4.0
+
+on:
+  push:
+    branches:
+      - build/pdf-accessibility-helper-v0.4.0
+  workflow_dispatch:
+
+jobs:
+  windows-portable:
+    runs-on: windows-latest
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Reconstruct and verify source
+        shell: pwsh
+        run: |
+          $parts = Get-ChildItem "pah-v040\v040_*.b64" | Sort-Object Name
+          if ($parts.Count -ne 10) {
+            throw "Expected 10 source chunks, found $($parts.Count)"
+          }
+          $b64 = ($parts | ForEach-Object { (Get-Content $_.FullName -Raw).Trim() }) -join ""
+          [IO.File]::WriteAllBytes("source.zip", [Convert]::FromBase64String($b64))
+          $hash = (Get-FileHash "source.zip" -Algorithm SHA256).Hash.ToLower()
+          if ($hash -ne "9d5af5319f95e191ca93741c0aedea0539d5c1f5c8cfa6d8fa169661e04e6c92") {
+            throw "Source archive hash mismatch: $hash"
+          }
+          Expand-Archive "source.zip" -DestinationPath "work" -Force
+          if (-not (Test-Path "work\pah040\scripts\build_windows.ps1")) {
+            throw "Source archive did not unpack as expected."
+          }
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.x"
+
+      - name: Install Windows runtime dependencies
+        shell: pwsh
+        run: |
+          choco install tesseract --yes --no-progress
+          choco install temurin21jre --yes --no-progress
+          $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("PATH", "User")
+          tesseract --version
+          java -version
+          go version
+
+      - name: Build, test, and exercise corpus
+        shell: pwsh
+        working-directory: work/pah040
+        run: |
+          .\scripts\build_windows.ps1
+
+      - name: Create portable ZIP
+        shell: pwsh
+        working-directory: work/pah040
+        run: |
+          $zip = ".\dist\PDF-Accessibility-Helper-v0.4.0-Windows-Portable.zip"
+          if (Test-Path $zip) { Remove-Item $zip -Force }
+          Compress-Archive -Path ".\dist\PDFAccessibilityHelper\*" -DestinationPath $zip -Force
+          if (-not (Test-Path $zip)) { throw "Portable ZIP was not created." }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PDF-Accessibility-Helper-v0.4.0-Windows-Portable
+          path: work/pah040/dist/PDF-Accessibility-Helper-v0.4.0-Windows-Portable.zip
+          if-no-files-found: error
+          retention-days: 30
