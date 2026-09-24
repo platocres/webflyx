@@ -54,6 +54,15 @@ jobs:
         shell: pwsh
         working-directory: work/pah040
         run: |
+          # PowerShell 7 rejects the redirect currently used by downloads.verapdf.org.
+          # Use Windows curl with redirect-following for the official installer instead.
+          $installerScript = Get-Content ".\scripts\install_verapdf.ps1" -Raw
+          $old = 'Invoke-WebRequest -Uri "https://downloads.verapdf.org/rel/verapdf-installer.zip" -OutFile $zip'
+          $new = 'curl.exe -L --fail --silent --show-error "https://downloads.verapdf.org/rel/verapdf-installer.zip" -o $zip; if ($LASTEXITCODE -ne 0) { throw "veraPDF download failed with exit code $LASTEXITCODE" }'
+          if (-not $installerScript.Contains($old)) { throw "Could not patch veraPDF downloader." }
+          $installerScript = $installerScript.Replace($old, $new)
+          Set-Content ".\scripts\install_verapdf.ps1" -Value $installerScript -Encoding UTF8
+
           .\scripts\build_windows.ps1
 
       - name: Create portable ZIP
